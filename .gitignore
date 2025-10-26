@@ -1,0 +1,8 @@
+# Compiled Java code & IDE files
+.vscode/
+*.class
+/src/main/webapp/WEB-INF/classes/
+.classpath
+.project
+.settings/
+/tmp
