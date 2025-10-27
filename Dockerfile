@@ -4,8 +4,8 @@
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
 ARG MYSQL_CONNECTOR_VERSION=8.0.30
-# Define the Tomcat version for API download
-ARG TOMCAT_VERSION=8.5.99 
+# Tomcat 8.5 implements Servlet 3.1. We need the actual API JARs for compilation.
+ARG SERVLET_API_VERSION=3.1.0 
 
 # Create necessary directories
 RUN mkdir -p /app/WEB-INF/classes
@@ -16,20 +16,20 @@ RUN mkdir -p /temp_lib
 WORKDIR /temp
 COPY . .
 
-# 2. Download essential JARs needed for COMPILATION (Servlet & JSP APIs)
-# We need these to compile any code that uses 'import javax.servlet.*'
-# These files are placed in a temporary library folder for compilation only.
-RUN wget -q https://repo1.maven.org/maven2/org/apache/tomcat/tomcat-servlet-api/${TOMCAT_VERSION}/tomcat-servlet-api-${TOMCAT_VERSION}.jar -O /temp_lib/servlet-api.jar
-RUN wget -q https://repo1.maven.org/maven2/org/apache/tomcat/tomcat-jsp-api/${TOMCAT_VERSION}/tomcat-jsp-api-${TOMCAT_VERSION}.jar -O /temp_lib/jsp-api.jar
+# 2. Download essential API JARs needed for COMPILATION
+# These files provide the 'javax.servlet.*' classes (Servlet, HttpServletRequest, etc.)
+RUN wget -q https://repo1.maven.org/maven2/javax/servlet/javax.servlet-api/${SERVLET_API_VERSION}/javax.servlet-api-${SERVLET_API_VERSION}.jar -O /temp_lib/servlet-api.jar
+RUN wget -q https://repo1.maven.org/maven2/javax/servlet/jsp/jsp-api/2.2/jsp-api-2.2.jar -O /temp_lib/jsp-api.jar
 
-# 3. Download MySQL Connector/J JAR. This file MUST go into WEB-INF/lib for runtime.
+# 3. Download MySQL Connector/J JAR (for runtime and compilation)
 RUN wget -q https://repo1.maven.org/maven2/mysql/mysql-connector-java/${MYSQL_CONNECTOR_VERSION}/mysql-connector-java-${MYSQL_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/mysql-connector.jar
 
 # 4. Define the Full CLASSPATH for compilation (JDBC + API JARs)
+# We combine the necessary compilation APIs and the required database driver.
 ENV CLASSPATH=/app/WEB-INF/lib/mysql-connector.jar:/temp_lib/servlet-api.jar:/temp_lib/jsp-api.jar
 
-# 5. Compile the Java Source files (.java) and put the output (.class) into WEB-INF/classes.
-# This compiles ALL *.java files found directly in the /temp root.
+# 5. Compile the Java Source files (.java)
+# This compiles all Java files in the root against the defined classpath.
 RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes *.java
 
 # 6. Move all content (JSP, HTML, CSS) into the final WAR root /app
@@ -37,7 +37,6 @@ RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes *.java
 RUN mv WEB-INF /app/WEB-INF
 
 # Move web content (JSP, HTML, CSS)
-# This finds all files that are NOT Java source code or the Dockerfile and moves them.
 RUN find . -maxdepth 1 -type f \
     ! -name "*.java" \
     ! -name "Dockerfile" \
