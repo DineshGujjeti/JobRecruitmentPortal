@@ -1,9 +1,10 @@
 # ------------------------------------
-# STAGE 1: BUILD THE WAR FILE
+# STAGE 1: BUILD THE WAR FILE (COMPILING JAVA AND PACKAGING)
 # ------------------------------------
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
-ARG MYSQL_CONNECTOR_VERSION=8.0.30
+# Change connector version to a stable PostgreSQL driver
+ARG POSTGRES_CONNECTOR_VERSION=42.2.27 
 ARG SERVLET_API_VERSION=3.1.0 
 
 # Create the final WAR assembly structure
@@ -15,23 +16,20 @@ RUN mkdir -p /temp_lib
 WORKDIR /temp
 COPY . .
 
-# 2. Download essential API JARs and MySQL Connector
+# 2. Download essential API JARs (for compilation)
 RUN wget -q https://repo1.maven.org/maven2/javax/servlet/javax.servlet-api/${SERVLET_API_VERSION}/javax.servlet-api-${SERVLET_API_VERSION}.jar -O /temp_lib/servlet-api.jar
 RUN wget -q https://repo1.maven.org/maven2/javax/servlet/jsp/jsp-api/2.2/jsp-api-2.2.jar -O /temp_lib/jsp-api.jar
-RUN wget -q https://repo1.maven.org/maven2/mysql/mysql-connector-java/${MYSQL_CONNECTOR_VERSION}/mysql-connector-java-${MYSQL_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/mysql-connector.jar
 
-# 3. Define the Full CLASSPATH for compilation 
-ENV CLASSPATH=/app/WEB-INF/lib/mysql-connector.jar:/temp_lib/servlet-api.jar:/temp_lib/jsp-api.jar
+# 3. Download the PostgreSQL Connector/J JAR (for runtime and compilation)
+RUN wget -q https://jdbc.postgresql.org/download/postgresql-${POSTGRES_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/postgres-connector.jar
 
-# 4. Compile the Java Source files (.java) 
+# 4. Define the Full CLASSPATH for compilation (Postgres JDBC + API JARs)
+ENV CLASSPATH=/app/WEB-INF/lib/postgres-connector.jar:/temp_lib/servlet-api.jar:/temp_lib/jsp-api.jar
+
+# 5. Compile the Java Source files (.java) 
 RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes *.java
 
-# 5. ASSEMBLE the final WAR structure in /app:
-# --- NEW FIX: Move web.xml from the root (/temp) to the required WEB-INF folder in the WAR structure (/app)
-RUN mv web.xml /app/WEB-INF/
-
-# Move web content (JSP, HTML, CSS)
-# Now, exclude web.xml from the general move since it's already moved.
+# 6. ASSEMBLE the final WAR structure in /app:
 RUN find . -maxdepth 1 -type f \
     ! -name "*.java" \
     ! -name "Dockerfile" \
@@ -39,7 +37,10 @@ RUN find . -maxdepth 1 -type f \
     ! -name "web.xml" \
     -exec mv {} /app/ \;
 
-# 6. Package the application into the WAR file
+# 7. Move web.xml to the correct WEB-INF folder
+RUN mv web.xml /app/WEB-INF/
+
+# 8. Package the application into the WAR file
 WORKDIR /app
 RUN jar -cvf jobportal.war .
 
