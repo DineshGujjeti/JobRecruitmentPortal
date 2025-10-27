@@ -1,38 +1,39 @@
 # ------------------------------------
-# STAGE 1: BUILD THE WAR FILE
+# STAGE 1: BUILD THE WAR FILE (COMPILING JAVA AND PACKAGING)
 # ------------------------------------
-# We use a full JDK image to compile the Java code and run 'jar'.
+# Use a full JDK image to compile the Java code and run 'jar'.
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
-# Set an argument for the MySQL Connector version (Tomcat 8.5/JRE 17 is compatible with 8.0.x)
+# Set an argument for the MySQL Connector version
 ARG MYSQL_CONNECTOR_VERSION=8.0.30
 
 # Create the standard WAR directory structure in a temporary location /app
+# /app will be the root of the WAR file.
 RUN mkdir -p /app/WEB-INF/classes
 RUN mkdir -p /app/WEB-INF/lib
 
-# Download the MySQL Connector/J JAR file. 
-# This is crucial for compilation and runtime database access.
+# 1. Copy ALL files from the Git root into the builder's working directory /temp.
+# We will sort them out from here.
+WORKDIR /temp
+COPY . .
+
+# 2. Download the MySQL Connector/J JAR file directly into the /app/WEB-INF/lib directory. 
 RUN wget -q https://repo1.maven.org/maven2/mysql/mysql-connector-java/${MYSQL_CONNECTOR_VERSION}/mysql-connector-java-${MYSQL_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/mysql-connector.jar
 
-# 1. Copy the Java Source files (from the 'src/' folder)
-# We copy these so they can be compiled.
-COPY src/ /app/src/
+# 3. Compile the Java Source files (.java) and put the output (.class) into WEB-INF/classes.
+# This uses the flat list of *.java files in the /temp root.
+RUN javac -cp /app/WEB-INF/lib/mysql-connector.jar -d /app/WEB-INF/classes *.java
 
-# 2. Copy the Web Content (JSP, HTML, CSS) from the root to the WAR root /app
-# This moves your JSP pages to the correct top-level location in the WAR.
-COPY *.jsp *.html *.css /app/
-# You may need to add more extensions here (e.g., *.js, *.png) if they are in the root.
+# 4. Move all non-Java/non-config files to the WAR root (/app)
+# This includes all your .jsp, .css, .sql, etc. files.
+# We exclude the .java files and .git folder which are not needed in the WAR.
+RUN find . -maxdepth 1 -type f \
+    ! -name "*.java" \
+    ! -name "*.git*" \
+    -exec mv {} /app/ \;
 
-# Define the CLASSPATH for compilation (must include the JDBC driver)
-ENV CLASSPATH=/app/WEB-INF/lib/mysql-connector.jar
-
-# Compile the Java source code
-# The compiled .class files go into /app/WEB-INF/classes
-RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes /app/src/**/*.java
-
-# Package the application into the WAR file
-# The jar command runs from /app and packages everything inside it.
+# 5. Package the application into the WAR file
+# Run the jar command from the WAR root folder /app
 WORKDIR /app
 RUN jar -cvf jobportal.war .
 
