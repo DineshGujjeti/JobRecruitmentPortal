@@ -1,25 +1,59 @@
-# Stage 1: Define the base image. 
-# We use the official Apache Tomcat 8.5 with JRE 17 (a stable, modern Java version).
+# ------------------------------------
+# STAGE 1: BUILD THE WAR FILE
+# ------------------------------------
+# We use a full JDK image to compile the Java code and run 'jar'.
+FROM eclipse-temurin:17-jdk-alpine AS builder
+
+# Set an argument for the MySQL Connector version (Tomcat 8.5/JRE 17 is compatible with 8.0.x)
+ARG MYSQL_CONNECTOR_VERSION=8.0.30
+
+# Create the standard WAR directory structure in a temporary location /app
+RUN mkdir -p /app/WEB-INF/classes
+RUN mkdir -p /app/WEB-INF/lib
+
+# Download the MySQL Connector/J JAR file. 
+# This is crucial for compilation and runtime database access.
+RUN wget -q https://repo1.maven.org/maven2/mysql/mysql-connector-java/${MYSQL_CONNECTOR_VERSION}/mysql-connector-java-${MYSQL_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/mysql-connector.jar
+
+# 1. Copy the Java Source files (from the 'src/' folder)
+# We copy these so they can be compiled.
+COPY src/ /app/src/
+
+# 2. Copy the Web Content (JSP, HTML, CSS) from the root to the WAR root /app
+# This moves your JSP pages to the correct top-level location in the WAR.
+COPY *.jsp *.html *.css /app/
+# You may need to add more extensions here (e.g., *.js, *.png) if they are in the root.
+
+# Define the CLASSPATH for compilation (must include the JDBC driver)
+ENV CLASSPATH=/app/WEB-INF/lib/mysql-connector.jar
+
+# Compile the Java source code
+# The compiled .class files go into /app/WEB-INF/classes
+RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes /app/src/**/*.java
+
+# Package the application into the WAR file
+# The jar command runs from /app and packages everything inside it.
+WORKDIR /app
+RUN jar -cvf jobportal.war .
+
+
+# ------------------------------------
+# STAGE 2: DEPLOY THE APPLICATION
+# ------------------------------------
+# Use a lighter Tomcat 8.5 JRE-only image for the final deployment.
 FROM tomcat:8.5-jre17-temurin
 
-# Stage 2: Set the working directory to Tomcat's webapps folder.
+# Set the deploy directory as the working directory
 WORKDIR /usr/local/tomcat/webapps
 
-# Stage 3: (Optional but recommended) Remove the default application.
-# This ensures your app is the main one accessible at the root URL.
+# Remove the default Tomcat application
 RUN rm -rf ROOT
 
-# Stage 4: Copy your WAR file into the webapps directory.
-# Rename the WAR to 'ROOT.war'. Tomcat automatically deploys any WAR placed here,
-# and naming it ROOT.war makes your application the main content for the domain (e.g., mysite.onrender.com/).
-# IMPORTANT: Ensure the filename 'JobPortal.war' matches the file in your Git repo.
-COPY JobPortal.war ROOT.war
+# Copy the built WAR file from the 'builder' stage into the Tomcat webapps directory.
+COPY --from=builder /app/jobportal.war ROOT.war
 
-# Stage 5: Expose the port. 
-# Render needs to know which port to map to the internet. Tomcat's default is 8080.
+# Expose the default Tomcat port
 EXPOSE 8080
 
-# Stage 6: Command to start the server. 
-# The base Tomcat image usually has a default entry point to start the server,
-# but explicitly running 'catalina.sh run' ensures it stays running in the container.
+# Command to start the Tomcat server
 CMD ["catalina.sh", "run"]
