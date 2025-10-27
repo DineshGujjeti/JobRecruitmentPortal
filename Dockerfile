@@ -1,39 +1,50 @@
 # ------------------------------------
 # STAGE 1: BUILD THE WAR FILE (COMPILING JAVA AND PACKAGING)
 # ------------------------------------
-# Use a full JDK image to compile the Java code and run 'jar'.
 FROM eclipse-temurin:17-jdk-alpine AS builder
 
-# Set an argument for the MySQL Connector version
 ARG MYSQL_CONNECTOR_VERSION=8.0.30
+# Define the Tomcat version for API download
+ARG TOMCAT_VERSION=8.5.99 
 
-# Create the standard WAR directory structure in a temporary location /app
-# /app will be the root of the WAR file.
+# Create necessary directories
 RUN mkdir -p /app/WEB-INF/classes
 RUN mkdir -p /app/WEB-INF/lib
+RUN mkdir -p /temp_lib 
 
 # 1. Copy ALL files from the Git root into the builder's working directory /temp.
-# We will sort them out from here.
 WORKDIR /temp
 COPY . .
 
-# 2. Download the MySQL Connector/J JAR file directly into the /app/WEB-INF/lib directory. 
+# 2. Download essential JARs needed for COMPILATION (Servlet & JSP APIs)
+# We need these to compile any code that uses 'import javax.servlet.*'
+# These files are placed in a temporary library folder for compilation only.
+RUN wget -q https://repo1.maven.org/maven2/org/apache/tomcat/tomcat-servlet-api/${TOMCAT_VERSION}/tomcat-servlet-api-${TOMCAT_VERSION}.jar -O /temp_lib/servlet-api.jar
+RUN wget -q https://repo1.maven.org/maven2/org/apache/tomcat/tomcat-jsp-api/${TOMCAT_VERSION}/tomcat-jsp-api-${TOMCAT_VERSION}.jar -O /temp_lib/jsp-api.jar
+
+# 3. Download MySQL Connector/J JAR. This file MUST go into WEB-INF/lib for runtime.
 RUN wget -q https://repo1.maven.org/maven2/mysql/mysql-connector-java/${MYSQL_CONNECTOR_VERSION}/mysql-connector-java-${MYSQL_CONNECTOR_VERSION}.jar -O /app/WEB-INF/lib/mysql-connector.jar
 
-# 3. Compile the Java Source files (.java) and put the output (.class) into WEB-INF/classes.
-# This uses the flat list of *.java files in the /temp root.
-RUN javac -cp /app/WEB-INF/lib/mysql-connector.jar -d /app/WEB-INF/classes *.java
+# 4. Define the Full CLASSPATH for compilation (JDBC + API JARs)
+ENV CLASSPATH=/app/WEB-INF/lib/mysql-connector.jar:/temp_lib/servlet-api.jar:/temp_lib/jsp-api.jar
 
-# 4. Move all non-Java/non-config files to the WAR root (/app)
-# This includes all your .jsp, .css, .sql, etc. files.
-# We exclude the .java files and .git folder which are not needed in the WAR.
+# 5. Compile the Java Source files (.java) and put the output (.class) into WEB-INF/classes.
+# This compiles ALL *.java files found directly in the /temp root.
+RUN javac -cp ${CLASSPATH} -d /app/WEB-INF/classes *.java
+
+# 6. Move all content (JSP, HTML, CSS) into the final WAR root /app
+# Move compiled classes and lib directory (the Java backend)
+RUN mv WEB-INF /app/WEB-INF
+
+# Move web content (JSP, HTML, CSS)
+# This finds all files that are NOT Java source code or the Dockerfile and moves them.
 RUN find . -maxdepth 1 -type f \
     ! -name "*.java" \
+    ! -name "Dockerfile" \
     ! -name "*.git*" \
     -exec mv {} /app/ \;
 
-# 5. Package the application into the WAR file
-# Run the jar command from the WAR root folder /app
+# 7. Package the application into the WAR file
 WORKDIR /app
 RUN jar -cvf jobportal.war .
 
@@ -41,20 +52,11 @@ RUN jar -cvf jobportal.war .
 # ------------------------------------
 # STAGE 2: DEPLOY THE APPLICATION
 # ------------------------------------
-# Use a lighter Tomcat 8.5 JRE-only image for the final deployment.
 FROM tomcat:8.5-jre17-temurin
 
-# Set the deploy directory as the working directory
 WORKDIR /usr/local/tomcat/webapps
-
-# Remove the default Tomcat application
 RUN rm -rf ROOT
-
-# Copy the built WAR file from the 'builder' stage into the Tomcat webapps directory.
 COPY --from=builder /app/jobportal.war ROOT.war
 
-# Expose the default Tomcat port
 EXPOSE 8080
-
-# Command to start the Tomcat server
 CMD ["catalina.sh", "run"]
